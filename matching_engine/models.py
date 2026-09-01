@@ -110,8 +110,8 @@ class Trade:
 class OperationResult:
     """Result of an order operation.
 
-    ``order_id`` is populated when the operation creates or leaves a resting
-    order.  Market orders that are fully filled or discarded have no ID.
+    ``order_id`` identifies a submitted limit order, including one that was
+    immediately filled.  Market orders are transient and therefore have no ID.
     """
 
     order_id: str | None = None

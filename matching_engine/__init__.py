@@ -1,5 +1,6 @@
 """Public domain API for the matching engine."""
 
+from .engine import MatchingEngine
 from .exceptions import (
     InvalidOrderError,
     MatchingEngineError,
@@ -23,6 +24,7 @@ __all__ = [
     "BookSnapshot",
     "InvalidOrderError",
     "LimitOrderBook",
+    "MatchingEngine",
     "MatchingEngineError",
     "MissingReferenceError",
     "OperationResult",

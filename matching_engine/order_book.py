@@ -150,6 +150,23 @@ class LimitOrderBook:
         order.generation += 1
         return order
 
+    def consume(self, order_id: str, quantity: int) -> RestingOrder:
+        """Apply an execution to an active maker order.
+
+        Partial fills update the order in place so its time priority is
+        unchanged.  A full fill uses logical removal, allowing the existing
+        lazy heap cleanup to discard its stale queue entry later.
+        """
+
+        fill_quantity = _quantity(quantity)
+        order = self.require(order_id)
+        if fill_quantity > order.quantity:
+            raise ValidationError("fill quantity exceeds remaining order quantity")
+        order.quantity -= fill_quantity
+        if order.quantity == 0:
+            self.remove(order_id)
+        return order
+
     def best(self, side: Side | str) -> RestingOrder | None:
         """Return the best active order for a side without executing it."""
 
