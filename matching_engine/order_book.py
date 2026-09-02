@@ -167,6 +167,16 @@ class LimitOrderBook:
             self.remove(order_id)
         return order
 
+    def reduce(self, order_id: str, quantity: int) -> RestingOrder:
+        """Reduce an order's remaining quantity without changing priority."""
+
+        new_quantity = _quantity(quantity)
+        order = self.require(order_id)
+        if new_quantity > order.quantity:
+            raise ValidationError("quantity reduction cannot increase an order")
+        order.quantity = new_quantity
+        return order
+
     def best(self, side: Side | str) -> RestingOrder | None:
         """Return the best active order for a side without executing it."""
 

@@ -2,7 +2,8 @@
 
 A dependency-free, single-asset matching engine written in Python 3.12. The
 current implementation supports resting limit orders, market orders, crossing
-limit orders, partial fills, and immutable book snapshots.
+limit orders, partial fills, cancellation, amendment, and immutable book
+snapshots.
 
 ## Architecture
 
@@ -38,6 +39,8 @@ LimitOrderBook  ----->  BookSnapshot
 - A crossing limit order executes immediately and rests any remainder.
 - An unfilled market-order remainder is discarded.
 - Only resting orders remain in the active book.
+- Quantity reductions retain FIFO priority; quantity increases and price
+  changes lose it.
 
 ## Data-structure costs
 
@@ -60,6 +63,10 @@ engine = MatchingEngine()
 engine.place_limit("sell", "20", 100)
 result = engine.place_market("buy", 50)
 
+order = engine.place_limit("buy", "10", 100)
+engine.amend(order.order_id, quantity=75)
+engine.cancel(order.order_id)
+
 print(result.trades)
 print(engine.snapshot())
 ```
@@ -73,5 +80,4 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
 
 The project is intentionally in memory, single-threaded, and limited to one
-asset. Cancellation, amendment, pegged orders, and the CLI are subsequent
-implementation stages.
+asset. Pegged orders and the CLI are subsequent implementation stages.

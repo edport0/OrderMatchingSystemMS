@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from .exceptions import ValidationError
 from .models import (
     BookSnapshot,
     OperationResult,
@@ -61,6 +62,62 @@ class MatchingEngine:
         _, trades = self._match(normalized_side, normalized_quantity)
         return OperationResult(order_id=None, trades=trades)
 
+    def cancel(self, order_id: str) -> None:
+        """Cancel a resting order.
+
+        Filled, previously cancelled, and otherwise unknown IDs all raise
+        :class:`UnknownOrderError` through the order book's ID registry.
+        """
+
+        self._validate_order_id(order_id)
+        self._book.remove(order_id)
+
+    def amend(
+        self,
+        order_id: str,
+        *,
+        price: Decimal | str | int | None = None,
+        quantity: int | None = None,
+    ) -> OperationResult:
+        """Change a resting limit order's price, quantity, or both.
+
+        Quantity is interpreted as the new remaining quantity.  Reductions at
+        an unchanged price retain time priority; increases and effective price
+        changes are handled as cancel-and-replace and receive new priority.
+        """
+
+        self._validate_order_id(order_id)
+        order = self._book.require(order_id)
+        if price is None and quantity is None:
+            raise ValidationError("amendment requires price, quantity, or both")
+
+        # Normalize every supplied field before changing state so a rejected
+        # amendment cannot partially modify or remove the existing order.
+        new_price = order.price if price is None else _decimal_price(price)
+        new_quantity = order.quantity if quantity is None else _quantity(quantity)
+
+        price_changed = new_price != order.price
+        quantity_increased = new_quantity > order.quantity
+
+        if not price_changed and not quantity_increased:
+            if new_quantity < order.quantity:
+                self._book.reduce(order_id, new_quantity)
+            return OperationResult(order_id=order_id)
+
+        side = order.side
+        self._book.remove(order_id)
+        remaining, trades = self._match(side, new_quantity, limit_price=new_price)
+        if remaining:
+            self._book.rest(
+                RestingOrder(
+                    order_id=order_id,
+                    side=side,
+                    price=new_price,
+                    quantity=remaining,
+                )
+            )
+        return OperationResult(order_id=order_id, trades=trades)
+
     def snapshot(self) -> BookSnapshot:
         """Return the book's immutable current view."""
 
@@ -70,6 +127,11 @@ class MatchingEngine:
         order_id = f"order_{self._next_limit_id:06d}"
         self._next_limit_id += 1
         return order_id
+
+    @staticmethod
+    def _validate_order_id(order_id: str) -> None:
+        if not isinstance(order_id, str) or not order_id.strip():
+            raise ValidationError("order_id must be a non-empty string")
 
     def _match(
         self,
