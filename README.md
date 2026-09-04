@@ -28,9 +28,9 @@ LimitOrderBook  ----->  BookSnapshot
 - **Peg synchronization** belongs to `MatchingEngine`. A buy peg follows the
   best regular bid and a sell peg follows the best regular offer. Repricing
   changes queue generation but preserves the original arrival sequence.
-- **Order registry** maps IDs directly to active orders. Cancellation-ready
-  logical removal and generation tokens let stale heap entries be discarded
-  lazily instead of requiring a linear search.
+- **Order registry** maps IDs directly to active orders. Logical removal and
+  generation tokens let stale heap entries be discarded lazily instead of
+  requiring a linear search.
 - **Domain models** provide validated enums and immutable public values such as
   `Trade`, `OperationResult`, `BookEntry`, and `BookSnapshot`. Prices use
   `Decimal` rather than binary floating point.
@@ -55,6 +55,41 @@ LimitOrderBook  ----->  BookSnapshot
   reappears.
 - Peg quantity reductions preserve priority and increases lose it. A peg's
   derived price cannot be amended directly.
+
+## Design decisions
+
+- **Crossing limit orders execute.** The exercise permits either ignoring or
+  filling a marketable limit order. This implementation fills it immediately,
+  because that mirrors exchange behavior, uses already-available liquidity,
+  and prevents a crossed book. Any unfilled quantity rests at its limit price.
+- **The resting order sets the trade price.** Earlier liquidity made the price
+  commitment, so an incoming market or crossing limit order executes at the
+  maker's price rather than its own price.
+- **Trade reports are aggregated by execution price.** Filling several FIFO
+  orders at the same price produces one `Trade` with their combined quantity,
+  matching the supplied example. Sweeping different prices produces one report
+  per price in execution order. Unmatched market quantity is discarded.
+- **Prices are exact decimals.** `Decimal` avoids binary floating-point
+  artifacts in comparison and price-level keys. Quantities are positive whole
+  numbers because the exercise models shares.
+- **Amendment quantity means new remaining quantity.** A reduction keeps queue
+  priority because it does not disadvantage other orders. An increase or an
+  effective price change is treated as cancel-and-replace and receives a new
+  arrival sequence. Zero quantity is rejected; cancellation is explicit.
+- **Peg references exclude pegged orders.** Only regular limits establish the
+  best bid or offer, avoiding circular or self-sustaining references. Only
+  peg-to-bid buys and peg-to-offer sells are accepted. Automatic repricing
+  preserves original priority, following the ordering shown in the exercise.
+- **A peg needs a reference only at creation.** A new unreferenced peg is
+  rejected. If an accepted peg later loses its last regular reference, it stays
+  active at its last price and follows the reference again when one reappears,
+  as clarified for the exercise.
+- **Heap removal is lazy.** Cancellation, full fills, amendments, and peg moves
+  update the authoritative ID registry and generation tokens immediately.
+  Obsolete heap entries are discarded when they reach a heap root, avoiding a
+  linear search during each state change.
+- **Public results are immutable.** Trades and snapshots are detached value
+  objects, so callers cannot mutate live orders or corrupt queue invariants.
 
 ## Data-structure costs
 
@@ -129,6 +164,25 @@ print(result.trades)
 print(engine.snapshot())
 ```
 
+## Assumptions and limitations
+
+- Engine state and its ID sequence exist only for the lifetime of one process.
+  Trades are returned to the caller but are not retained; there is no
+  persistence, recovery, or trade-history service.
+- The engine handles one asset on one thread. It has no networking,
+  authentication, parallel order entry, or distributed sequencing.
+- IDs are deterministic and process-local. Filled and cancelled orders leave
+  the active registry and cannot subsequently be cancelled or amended.
+- Any positive finite decimal price is accepted. Currency, tick size, maximum
+  precision, maximum quantity, and regulatory constraints are outside scope.
+- The lazy heaps can retain stale entries below their roots. This is appropriate
+  for the bounded in-memory exercise, but a long-running production engine
+  would need compaction or a different indexed data structure.
+- Automatic peg repricing preserves original time priority because that is what
+  the supplied example demonstrates; real venues may use different rules.
+- The implementation prioritizes correctness and explainability over
+  concurrency and production-grade latency benchmarking.
+
 ## Tests
 
 The test suite uses only the Python standard library:
@@ -137,5 +191,6 @@ The test suite uses only the Python standard library:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
 
-The project is intentionally in memory, single-threaded, and limited to one
-asset.
+Tests cover the supplied examples, price-time priority, partial and multi-level
+fills, amendments, cancellation, both peg sides, reference loss/reappearance,
+CLI parsing, batch execution, and deterministic randomized lifecycle invariants.

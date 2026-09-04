@@ -99,7 +99,7 @@ class LimitOrderBook:
 
     The order ID index makes lookup and logical removal O(1).  Price and queue
     heaps use lazy invalidation: stale entries are discarded only when they
-    reach the relevant heap's head, keeping future repricing and cancellation
+    reach the relevant heap's head, keeping repricing and cancellation
     operations independent of queue length.
     """
 

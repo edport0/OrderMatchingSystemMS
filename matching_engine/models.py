@@ -2,7 +2,7 @@
 
 The matching engine itself is deliberately not part of this first scaffold.
 These types establish the public vocabulary shared by the order book, engine,
-and command-line adapter that will be added in subsequent commits.
+and command-line adapter.
 """
 
 from __future__ import annotations
