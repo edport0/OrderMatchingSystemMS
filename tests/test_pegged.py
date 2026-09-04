@@ -3,17 +3,16 @@ from decimal import Decimal
 from random import Random
 
 from matching_engine import (
-    LimitOrderBook,
     MatchingEngine,
     MissingReferenceError,
     OrderType,
     PegReference,
-    RestingOrder,
     Side,
     Trade,
     UnknownOrderError,
     ValidationError,
 )
+from matching_engine.order_book import LimitOrderBook, RestingOrder
 
 
 class PeggedExerciseExampleTests(unittest.TestCase):

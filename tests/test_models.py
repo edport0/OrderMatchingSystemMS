@@ -2,6 +2,7 @@ import unittest
 from dataclasses import FrozenInstanceError
 from decimal import Decimal
 
+import matching_engine
 from matching_engine import (
     BookEntry,
     BookSnapshot,
@@ -21,6 +22,12 @@ class EnumTests(unittest.TestCase):
         self.assertEqual(OrderType("market"), OrderType.MARKET)
         self.assertEqual(PegReference("offer"), PegReference.OFFER)
         self.assertIs(Side.BUY.opposite, Side.SELL)
+
+    def test_mutable_book_types_are_not_part_of_the_public_package(self):
+        self.assertNotIn("LimitOrderBook", matching_engine.__all__)
+        self.assertNotIn("RestingOrder", matching_engine.__all__)
+        self.assertFalse(hasattr(matching_engine, "LimitOrderBook"))
+        self.assertFalse(hasattr(matching_engine, "RestingOrder"))
 
 
 class ValueTypeTests(unittest.TestCase):

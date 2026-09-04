@@ -17,20 +17,16 @@ from .models import (
     Side,
     Trade,
 )
-from .order_book import LimitOrderBook, RestingOrder
-
 __all__ = [
     "BookEntry",
     "BookSnapshot",
     "InvalidOrderError",
-    "LimitOrderBook",
     "MatchingEngine",
     "MatchingEngineError",
     "MissingReferenceError",
     "OperationResult",
     "OrderType",
     "PegReference",
-    "RestingOrder",
     "Side",
     "Trade",
     "UnknownOrderError",

@@ -1,8 +1,9 @@
 import unittest
 from decimal import Decimal
 
-from matching_engine import LimitOrderBook, RestingOrder, Side, ValidationError
+from matching_engine import Side, ValidationError
 from matching_engine.exceptions import UnknownOrderError
+from matching_engine.order_book import LimitOrderBook, RestingOrder
 
 
 def order(order_id, side, price, quantity):
