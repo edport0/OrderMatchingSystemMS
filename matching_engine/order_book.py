@@ -1,4 +1,4 @@
-"""Price-time priority storage for resting limit orders.
+"""Price-time priority storage for resting limit and pegged orders.
 
 This module intentionally stores orders only.  It does not decide whether an
 incoming order is marketable and does not execute trades; those policies belong
@@ -17,8 +17,11 @@ from .models import (
     BookEntry,
     BookSnapshot,
     OrderType,
+    PegReference,
     Side,
     _decimal_price,
+    _order_type,
+    _peg_reference,
     _quantity,
     _side,
 )
@@ -26,18 +29,19 @@ from .models import (
 
 @dataclass(slots=True)
 class RestingOrder:
-    """Mutable internal representation of a resting LIMIT order.
+    """Mutable internal representation of resting executable liquidity.
 
     ``sequence`` is assigned by the book and is never reused.  ``generation``
-    invalidates old queue entries when the order is removed or repriced by a
-    future layer.  The latter is kept here so amendment support can build on
-    this storage without changing its public contract.
+    invalidates old queue entries when the order is removed or repriced while
+    allowing an automatic peg move to retain the original time priority.
     """
 
     order_id: str
     side: Side
     price: Decimal
     quantity: int
+    order_type: OrderType = OrderType.LIMIT
+    peg_reference: PegReference | None = None
     sequence: int = field(default=0, init=False)
     generation: int = field(default=0, init=False)
     active: bool = field(default=True, init=False)
@@ -48,6 +52,20 @@ class RestingOrder:
         self.side = _side(self.side)
         self.price = _decimal_price(self.price)
         self.quantity = _quantity(self.quantity)
+        self.order_type = _order_type(self.order_type)
+        self.peg_reference = _peg_reference(self.peg_reference)
+        if self.order_type is OrderType.MARKET:
+            raise ValidationError("market orders cannot rest in the book")
+        if self.order_type is OrderType.PEGGED:
+            if self.peg_reference is None:
+                raise ValidationError("pegged orders require a peg reference")
+            expected_reference = (
+                PegReference.BID if self.side is Side.BUY else PegReference.OFFER
+            )
+            if self.peg_reference is not expected_reference:
+                raise ValidationError("buy pegs must reference bid and sell pegs offer")
+        elif self.peg_reference is not None:
+            raise ValidationError("only pegged orders may have a peg reference")
 
     @property
     def remaining_quantity(self) -> int:
@@ -63,7 +81,8 @@ class RestingOrder:
             side=self.side,
             price=self.price,
             quantity=self.quantity,
-            order_type=OrderType.LIMIT,
+            order_type=self.order_type,
+            peg_reference=self.peg_reference,
         )
 
 
@@ -76,7 +95,7 @@ class _PriceLevel:
 
 
 class LimitOrderBook:
-    """In-memory resting LIMIT order book with price-time ordering.
+    """In-memory resting order book with price-time ordering.
 
     The order ID index makes lookup and logical removal O(1).  Price and queue
     heaps use lazy invalidation: stale entries are discarded only when they
@@ -88,6 +107,12 @@ class LimitOrderBook:
         self._orders: dict[str, RestingOrder] = {}
         self._levels: dict[tuple[Side, Decimal], _PriceLevel] = {}
         self._price_heaps: dict[Side, list[tuple[Decimal, int, Decimal]]] = {
+            Side.BUY: [],
+            Side.SELL: [],
+        }
+        self._regular_heaps: dict[
+            Side, list[tuple[Decimal, int, int, str, Decimal]]
+        ] = {
             Side.BUY: [],
             Side.SELL: [],
         }
@@ -122,6 +147,8 @@ class LimitOrderBook:
 
         heapq.heappush(level.entries, (order.sequence, order.generation, order.order_id))
         self._orders[order.order_id] = order
+        if order.order_type is OrderType.LIMIT:
+            self._push_regular(order)
         return order
 
     # ``insert`` makes the primitive self-documenting for callers that think
@@ -177,6 +204,32 @@ class LimitOrderBook:
         order.quantity = new_quantity
         return order
 
+    def reprice(self, order_id: str, price: Decimal | str | int) -> RestingOrder:
+        """Move an active order to another level while retaining its sequence."""
+
+        new_price = _decimal_price(price)
+        order = self.require(order_id)
+        if new_price == order.price:
+            return order
+
+        order.generation += 1
+        order.price = new_price
+        key = (order.side, new_price)
+        level = self._levels.get(key)
+        if level is None:
+            level = _PriceLevel(self._next_level_generation)
+            self._next_level_generation += 1
+            self._levels[key] = level
+            price_key = new_price if order.side is Side.SELL else -new_price
+            heapq.heappush(
+                self._price_heaps[order.side],
+                (price_key, level.generation, new_price),
+            )
+        heapq.heappush(level.entries, (order.sequence, order.generation, order_id))
+        if order.order_type is OrderType.LIMIT:
+            self._push_regular(order)
+        return order
+
     def best(self, side: Side | str) -> RestingOrder | None:
         """Return the best active order for a side without executing it."""
 
@@ -206,6 +259,28 @@ class LimitOrderBook:
 
         return self.best(Side.SELL)
 
+    def best_regular(self, side: Side | str) -> RestingOrder | None:
+        """Return the best regular LIMIT order, excluding all pegged orders."""
+
+        side = _side(side)
+        regular_orders = self._regular_heaps[side]
+        while regular_orders:
+            _, sequence, generation, order_id, price = regular_orders[0]
+            order = self._orders.get(order_id)
+            if (
+                order is None
+                or not order.active
+                or order.order_type is not OrderType.LIMIT
+                or order.side is not side
+                or order.price != price
+                or order.sequence != sequence
+                or order.generation != generation
+            ):
+                heapq.heappop(regular_orders)
+                continue
+            return order
+        return None
+
     def active_orders(self, side: Side | str | None = None) -> Iterator[RestingOrder]:
         """Iterate active orders in book display order.
 
@@ -233,6 +308,19 @@ class LimitOrderBook:
         bids = tuple(order.as_book_entry() for order in self.active_orders(Side.BUY))
         offers = tuple(order.as_book_entry() for order in self.active_orders(Side.SELL))
         return BookSnapshot(bids=bids, offers=offers)
+
+    def _push_regular(self, order: RestingOrder) -> None:
+        price_key = order.price if order.side is Side.SELL else -order.price
+        heapq.heappush(
+            self._regular_heaps[order.side],
+            (
+                price_key,
+                order.sequence,
+                order.generation,
+                order.order_id,
+                order.price,
+            ),
+        )
 
     def _clean_level(
         self, side: Side, price: Decimal, level: _PriceLevel

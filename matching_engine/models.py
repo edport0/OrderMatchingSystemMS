@@ -110,7 +110,7 @@ class Trade:
 class OperationResult:
     """Result of an order operation.
 
-    ``order_id`` identifies a placed or amended limit order, including one
+    ``order_id`` identifies a placed or amended resting order, including one
     that was immediately filled. Market orders are transient and have no ID.
     """
 
