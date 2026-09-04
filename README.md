@@ -34,6 +34,9 @@ LimitOrderBook  ----->  BookSnapshot
 - **Domain models** provide validated enums and immutable public values such as
   `Trade`, `OperationResult`, `BookEntry`, and `BookSnapshot`. Prices use
   `Decimal` rather than binary floating point.
+- **CommandProcessor** translates text commands into public `MatchingEngine`
+  calls. The stream runner adds prompts only for a terminal and reads batch
+  commands without prompts until EOF.
 
 ## Matching rules
 
@@ -68,6 +71,46 @@ LimitOrderBook  ----->  BookSnapshot
 `P` is the number of price levels, `Q` the number of orders at one level, and
 `N` the total number of active orders.
 
+## Command interface
+
+Start an interactive session:
+
+```bash
+python3 -m matching_engine
+```
+
+Or process a file or redirected input in batch mode:
+
+```bash
+python3 -m matching_engine < commands.txt
+```
+
+Supported commands:
+
+```text
+limit <buy|sell> <price> <qty>
+market <buy|sell> <qty>
+peg <bid|offer> <buy|sell> <qty>
+cancel order <order_id>
+amend order <order_id> [price <price>] [qty <qty>]
+print book
+help
+quit
+```
+
+Example:
+
+```text
+>>> limit sell 20 100
+Order created: sell 100 @ 20 order_000001
+>>> market buy 25
+Trade, price: 20, qty: 25
+>>> print book
+Buy orders | Sell orders
+-----------+-----------------------
+(empty)    | 75 @ 20 [order_000001]
+```
+
 ## Current API
 
 ```python
@@ -95,4 +138,4 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
 
 The project is intentionally in memory, single-threaded, and limited to one
-asset. The CLI is a subsequent implementation stage.
+asset.
