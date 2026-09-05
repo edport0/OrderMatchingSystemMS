@@ -1,5 +1,5 @@
 import unittest
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 from matching_engine import Side, ValidationError
 from matching_engine.exceptions import UnknownOrderError
@@ -79,6 +79,14 @@ class LimitOrderBookTests(unittest.TestCase):
         self.assertEqual(decimal_order.price, Decimal("0.3"))
         self.assertIs(book.best_bid(), decimal_order)
         self.assertEqual(book.snapshot().bids[0].price, Decimal("0.3"))
+
+    def test_extreme_decimal_bid_ordering_is_not_context_rounded(self):
+        book = LimitOrderBook()
+        with localcontext() as context:
+            context.prec = 2
+            book.rest(order("a", Side.BUY, "1.0000000000000000000000000001", 1))
+            book.rest(order("b", Side.BUY, "1.0000000000000000000000000002", 1))
+        self.assertEqual(book.best_bid().order_id, "b")
 
     def test_only_resting_order_values_can_be_inserted(self):
         with self.assertRaises(ValidationError):

@@ -133,19 +133,7 @@ class LimitOrderBook:
         self._next_sequence += 1
         order.generation = 0
 
-        key = (order.side, order.price)
-        level = self._levels.get(key)
-        if level is None:
-            level = _PriceLevel(self._next_level_generation)
-            self._next_level_generation += 1
-            self._levels[key] = level
-            price_key = order.price if order.side is Side.SELL else -order.price
-            heapq.heappush(
-                self._price_heaps[order.side],
-                (price_key, level.generation, order.price),
-            )
-
-        heapq.heappush(level.entries, (order.sequence, order.generation, order.order_id))
+        self._enqueue(order)
         self._orders[order.order_id] = order
         if order.order_type is OrderType.LIMIT:
             self._push_regular(order)
@@ -204,7 +192,7 @@ class LimitOrderBook:
         order.quantity = new_quantity
         return order
 
-    def reprice(self, order_id: str, price: Decimal | str | int) -> RestingOrder:
+    def reprice(self, order_id: str, price: Decimal | str | float | int) -> RestingOrder:
         """Move an active order to another level while retaining its sequence."""
 
         new_price = _decimal_price(price)
@@ -214,18 +202,7 @@ class LimitOrderBook:
 
         order.generation += 1
         order.price = new_price
-        key = (order.side, new_price)
-        level = self._levels.get(key)
-        if level is None:
-            level = _PriceLevel(self._next_level_generation)
-            self._next_level_generation += 1
-            self._levels[key] = level
-            price_key = new_price if order.side is Side.SELL else -new_price
-            heapq.heappush(
-                self._price_heaps[order.side],
-                (price_key, level.generation, new_price),
-            )
-        heapq.heappush(level.entries, (order.sequence, order.generation, order_id))
+        self._enqueue(order)
         if order.order_type is OrderType.LIMIT:
             self._push_regular(order)
         return order
@@ -296,7 +273,7 @@ class LimitOrderBook:
             sorted(
                 selected,
                 key=lambda order: (
-                    -order.price if order.side is Side.BUY else order.price,
+                    self._price_key(order.side, order.price),
                     order.sequence,
                 ),
             )
@@ -310,7 +287,7 @@ class LimitOrderBook:
         return BookSnapshot(bids=bids, offers=offers)
 
     def _push_regular(self, order: RestingOrder) -> None:
-        price_key = order.price if order.side is Side.SELL else -order.price
+        price_key = self._price_key(order.side, order.price)
         heapq.heappush(
             self._regular_heaps[order.side],
             (
@@ -321,6 +298,26 @@ class LimitOrderBook:
                 order.price,
             ),
         )
+
+    @staticmethod
+    def _price_key(side: Side, price: Decimal) -> Decimal:
+        # Unary minus can round a Decimal; reversing priority must remain exact.
+        return price if side is Side.SELL else price.copy_negate()
+
+    def _enqueue(self, order: RestingOrder) -> None:
+        """Find/create a level and enqueue an order with its FIFO token."""
+
+        key = (order.side, order.price)
+        level = self._levels.get(key)
+        if level is None:
+            level = _PriceLevel(self._next_level_generation)
+            self._next_level_generation += 1
+            self._levels[key] = level
+            heapq.heappush(
+                self._price_heaps[order.side],
+                (self._price_key(order.side, order.price), level.generation, order.price),
+            )
+        heapq.heappush(level.entries, (order.sequence, order.generation, order.order_id))
 
     def _clean_level(
         self, side: Side, price: Decimal, level: _PriceLevel

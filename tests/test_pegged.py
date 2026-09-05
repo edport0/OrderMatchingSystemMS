@@ -127,6 +127,22 @@ class PeggedReferenceLifecycleTests(unittest.TestCase):
             [(peg.order_id, Decimal("8.75")), (new_reference.order_id, Decimal("8.75"))],
         )
 
+    def test_same_price_reference_reappearance_resynchronizes_peg(self):
+        engine = MatchingEngine()
+        reference = engine.place_limit("buy", "10", 10)
+        peg = engine.place_pegged("buy", "bid", 10)
+        self.assertEqual(engine._last_reference_prices[PegReference.BID], Decimal("10"))
+
+        engine.cancel(reference.order_id)
+        self.assertIsNone(engine._last_reference_prices[PegReference.BID])
+        replacement = engine.place_limit("buy", "10", 10)
+
+        self.assertEqual(engine._last_reference_prices[PegReference.BID], Decimal("10"))
+        self.assertEqual(
+            [(entry.order_id, entry.price) for entry in engine.snapshot().bids],
+            [(peg.order_id, Decimal("10")), (replacement.order_id, Decimal("10"))],
+        )
+
     def test_market_sweep_reprices_peg_to_next_regular_bid(self):
         engine = MatchingEngine()
         engine.place_limit("buy", "10", 10)

@@ -34,9 +34,13 @@ class MatchingEngine:
             PegReference.BID: set(),
             PegReference.OFFER: set(),
         }
+        self._last_reference_prices: dict[PegReference, Decimal | None] = {
+            PegReference.BID: None,
+            PegReference.OFFER: None,
+        }
 
     def place_limit(
-        self, side: Side | str, price: Decimal | str | int, quantity: int
+        self, side: Side | str, price: Decimal | str | float | int, quantity: int
     ) -> OperationResult:
         """Submit a limit order, matching first and resting any remainder."""
 
@@ -121,7 +125,7 @@ class MatchingEngine:
         self,
         order_id: str,
         *,
-        price: Decimal | str | int | None = None,
+        price: Decimal | str | float | int | None = None,
         quantity: int | None = None,
     ) -> OperationResult:
         """Amend a regular order's price/quantity or a peg's quantity.
@@ -150,7 +154,6 @@ class MatchingEngine:
         if not price_changed and not quantity_increased:
             if new_quantity < order.quantity:
                 self._book.reduce(order_id, new_quantity)
-            self._sync_reference_for_side(order.side)
             return OperationResult(order_id=order_id)
 
         side = order.side
@@ -188,7 +191,7 @@ class MatchingEngine:
         self,
         order: RestingOrder,
         *,
-        price: Decimal | str | int | None,
+        price: Decimal | str | float | int | None,
         quantity: int | None,
     ) -> OperationResult:
         if price is not None:
@@ -248,14 +251,19 @@ class MatchingEngine:
                     self._pegged_ids[maker_reference].discard(maker.order_id)
                 else:
                     self._sync_reference_for_side(maker_side)
-            elif maker_type is OrderType.LIMIT:
-                self._sync_reference_for_side(maker_side)
 
         return remaining, tuple(trades)
 
     def _sync_reference_for_side(self, side: Side) -> None:
+        """Visit pegs only when their regular reference price changes."""
+
         reference = PegReference.BID if side is Side.BUY else PegReference.OFFER
         regular = self._book.best_regular(side)
+        current_price = regular.price if regular is not None else None
+        if current_price == self._last_reference_prices[reference]:
+            return
+        # Remember loss too, so a reference returning at the same price is seen.
+        self._last_reference_prices[reference] = current_price
         if regular is None:
             return
 
@@ -269,7 +277,7 @@ class MatchingEngine:
                 active_pegs.append(order)
         for order_id in stale_ids:
             self._pegged_ids[reference].discard(order_id)
-        for order in sorted(active_pegs, key=lambda value: value.sequence):
+        for order in active_pegs:
             self._book.reprice(order.order_id, regular.price)
 
     @staticmethod

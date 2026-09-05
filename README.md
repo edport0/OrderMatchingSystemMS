@@ -27,7 +27,8 @@ LimitOrderBook  ----->  BookSnapshot
   A separate lazy index tracks only regular limits for peg references.
 - **Peg synchronization** belongs to `MatchingEngine`. A buy peg follows the
   best regular bid and a sell peg follows the best regular offer. Repricing
-  changes queue generation but preserves the original arrival sequence.
+  changes queue generation but preserves the original arrival sequence. The
+  engine remembers each reference price and visits pegs only when it changes.
 - **Order registry** maps IDs directly to active orders. Logical removal and
   generation tokens let stale heap entries be discarded lazily instead of
   requiring a linear search.
@@ -69,9 +70,12 @@ LimitOrderBook  ----->  BookSnapshot
   orders at the same price produces one `Trade` with their combined quantity,
   matching the supplied example. Sweeping different prices produces one report
   per price in execution order. Unmatched market quantity is discarded.
-- **Prices are exact decimals.** `Decimal` avoids binary floating-point
-  artifacts in comparison and price-level keys. Quantities are positive whole
-  numbers because the exercise models shares.
+- **Prices remain exact inside the book.** Strings and `Decimal` values can
+  carry arbitrary decimal precision. Python floats are converted through
+  `Decimal(str(value))`, with no two-decimal restriction or rounding. Bid keys
+  use `Decimal.copy_negate()` to reverse
+  price priority without the rounding that ordinary decimal negation can
+  introduce. Quantities are positive whole numbers.
 - **Amendment quantity means new remaining quantity.** A reduction keeps queue
   priority because it does not disadvantage other orders. An increase or an
   effective price change is treated as cancel-and-replace and receives a new
@@ -84,6 +88,11 @@ LimitOrderBook  ----->  BookSnapshot
   rejected. If an accepted peg later loses its last regular reference, it stays
   active at its last price and follows the reference again when one reappears,
   as clarified for the exercise.
+- **Only reference changes require peg updates.** Partial fills and quantity
+  reductions leave the reference price unchanged. A full fill can change it,
+  so the engine checks the reference before selecting the next maker. Pegs
+  keep their original sequence numbers; the queue heaps enforce FIFO without
+  sorting the pegs during synchronization.
 - **Heap removal is lazy.** Cancellation, full fills, amendments, and peg moves
   update the authoritative ID registry and generation tokens immediately.
   Obsolete heap entries are discarded when they reach a heap root, avoiding a
@@ -91,20 +100,22 @@ LimitOrderBook  ----->  BookSnapshot
 - **Public results are immutable.** Trades and snapshots are detached value
   objects, so callers cannot mutate live orders or corrupt queue invariants.
 
-## Data-structure costs
+## Performance, roughly
 
-| Operation | Expected cost |
+| Operation | Cost to keep in mind |
 | --- | --- |
-| Active-order lookup or logical removal | `O(1)` |
-| Rest a regular order | `O(log P + log Q + log N)` |
-| Rest a pegged order | `O(log P + log Q)` |
-| Read the best order | `O(1)` when clean; stale cleanup is amortized |
-| Read the best regular reference | `O(1)` when clean; stale cleanup is amortized |
-| Reprice a peg | `O(log P + log Q)` |
-| Build a sorted snapshot | `O(N log N)` |
+| Active-order lookup or logical removal | Expected constant time |
+| Insert or reprice a resting order | Logarithmic work in a few heaps |
+| Find the best order or regular reference | Constant time at a valid root; extra work to remove stale entries |
+| Synchronize a changed reference | Visit its pegs and update their heap entries |
+| Match an incoming order | Work grows with the makers filled and any peg updates |
+| Build a snapshot | Sort the active orders: `O(N log N)` |
 
-`P` is the number of price levels, `Q` the number of orders at one level, and
-`N` the total number of active orders.
+Lazy invalidation moves heap cleanup to later lookups. Each stale entry is
+removed at most once, but one lookup may clear several, and entries below a
+valid root may stay in memory. Heap costs therefore depend on stored entries,
+including stale ones, rather than just active orders. Cancelling through the
+engine may also update pegs; only the registry removal itself is constant time.
 
 ## Command interface
 
@@ -164,6 +175,18 @@ print(result.trades)
 print(engine.snapshot())
 ```
 
+All price input types may have more than two decimal places:
+
+```python
+engine.place_limit("buy", "10.251", 1)   # Exact string price
+engine.place_limit("buy", 10.251, 1)     # Converted to Decimal("10.251")
+engine.place_limit("buy", 0.1 + 0.2, 1)  # Decimal("0.30000000000000004")
+```
+
+The engine imposes no tick-size rule. Prefer strings or `Decimal` when exact
+input matters: converting a float to text cannot recover precision lost in
+earlier arithmetic. CLI prices arrive as strings.
+
 ## Assumptions and limitations
 
 - Engine state and its ID sequence exist only for the lifetime of one process.
@@ -173,8 +196,9 @@ print(engine.snapshot())
   authentication, parallel order entry, or distributed sequencing.
 - IDs are deterministic and process-local. Filled and cancelled orders leave
   the active registry and cannot subsequently be cancelled or amended.
-- Any positive finite decimal price is accepted. Currency, tick size, maximum
-  precision, maximum quantity, and regulatory constraints are outside scope.
+- Prices must be positive and finite, with no application-level precision cap.
+  Currency, tick size, maximum quantity, and regulatory constraints are outside
+  scope.
 - The lazy heaps can retain stale entries below their roots. This is appropriate
   for the bounded in-memory exercise, but a long-running production engine
   would need compaction or a different indexed data structure.
@@ -193,4 +217,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 
 Tests cover the supplied examples, price-time priority, partial and multi-level
 fills, amendments, cancellation, both peg sides, reference loss/reappearance,
-CLI parsing, batch execution, and deterministic randomized lifecycle invariants.
+CLI parsing, and batch execution. Regression cases exercise float conversion,
+long decimal prices, altered decimal contexts, and unchanged peg references.
+Seeded randomized lifecycles compare the engine with a simple reference model
+and check trades, snapshots, quantities, active IDs, FIFO queues, peg references,
+and the absence of a crossed book after operations.

@@ -1,9 +1,4 @@
-"""Small, dependency-free domain types used by the matching engine.
-
-The matching engine itself is deliberately not part of this first scaffold.
-These types establish the public vocabulary shared by the order book, engine,
-and command-line adapter.
-"""
+"""Small, dependency-free domain types shared by the matching engine layers."""
 
 from __future__ import annotations
 
@@ -44,7 +39,7 @@ class PegReference(str, Enum):
 
 
 def _decimal_price(value: Any) -> Decimal:
-    """Convert a price to an exact positive finite Decimal."""
+    """Convert a price to a positive finite Decimal without rounding."""
 
     if isinstance(value, bool):
         raise ValidationError("price must be a positive finite decimal")

@@ -84,6 +84,17 @@ class ValueTypeTests(unittest.TestCase):
                 with self.assertRaises(ValidationError):
                     Trade(price, 1)
 
+    def test_float_prices_use_their_decimal_spelling_without_rounding(self):
+        for price in (10.25, 10.0, 0.1, 10.251, 0.1 + 0.2, 1e-3, 1e20):
+            with self.subTest(price=price):
+                self.assertEqual(Trade(price, 1).price, Decimal(str(price)))
+        for price in (float("inf"), float("nan")):
+            with self.subTest(price=price):
+                with self.assertRaises(ValidationError):
+                    Trade(price, 1)
+        Trade("1.23456789", 1)
+        Trade(Decimal("1.23456789"), 1)
+
 
 class ExceptionTests(unittest.TestCase):
     def test_missing_reference_is_validation_error(self):
